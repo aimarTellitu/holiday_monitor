@@ -28,12 +28,17 @@ jobs:
       - run: npm ci
 
       - name: Chequear disponibilidad
-        # HEARTBEAT solo se activa cuando dispara el cron del heartbeat; en el
-        # chequeo normal y en los lanzamientos manuales queda vacío.
+        # HEARTBEAT (mensaje "sigo vivo" con el resultado) se activa cuando:
+        #  - dispara el cron del heartbeat, o
+        #  - la variable de repositorio HEARTBEAT_SIEMPRE vale "1" (útil al
+        #    principio para confirmar en CADA ejecución que Telegram y el
+        #    chequeo funcionan; bórrala o ponla a "0" cuando ya no la quieras).
+        # Se configura en: Settings -> Secrets and variables -> Actions ->
+        # pestaña "Variables" -> New repository variable.
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          HEARTBEAT: ${{ github.event.schedule == '0 7,10,13,16,19 * * *' && '1' || '' }}
+          HEARTBEAT: ${{ (github.event.schedule == '0 7,10,13,16,19 * * *' || vars.HEARTBEAT_SIEMPRE == '1') && '1' || '' }}
         # El script sale con 1 cuando todo está COMPLETO (no es un fallo del
         # workflow), así que no marcamos la ejecución como fallida por ello.
         run: node check-camping.js || [ $? -eq 1 ]

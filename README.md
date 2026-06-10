@@ -54,6 +54,17 @@ node check-camping.js
 $env:HEARTBEAT = "1"; node check-camping.js
 ```
 
+#### Forzar el heartbeat en GitHub Actions (rodaje)
+
+En la nube, el heartbeat solo se manda en su propio cron (5×/día). Para
+confirmar **en cada ejecución** que Telegram y el chequeo funcionan —útil los
+primeros días—, define una **variable de repositorio** `HEARTBEAT_SIEMPRE` con
+valor `1` en _Settings → Secrets and variables → Actions → pestaña Variables →
+New repository variable_. Mientras valga `1`, todas las ejecuciones (incluidas
+las manuales y las de cada 30 min) mandan el mensaje "sigo vivo". Cuando ya no
+lo necesites, **bórrala o ponla a `0`**. Es una _variable_, no un _secret_: el
+valor es visible, lo cual está bien para un simple interruptor.
+
 ### Códigos de salida
 
 | Código | Significado                                            |
