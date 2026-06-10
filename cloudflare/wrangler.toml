@@ -3,6 +3,11 @@ main = "src/worker.js"
 compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Dejamos la URL pública .workers.dev activada (la usamos para probar a mano)
+# y desactivamos las Preview URLs por versión (no las necesitamos).
+workers_dev = true
+preview_urls = false
+
 # Cron Triggers de Cloudflare (fiables y puntuales).
 #   - chequeo de disponibilidad cada 30 min
 #   - heartbeat "sigo vivo" 5 veces/día (debe coincidir con CONFIG.cronHeartbeat
