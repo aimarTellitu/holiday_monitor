@@ -13,7 +13,6 @@ probando primero la llegada en **sábado** y luego en **domingo**.
 
 ```powershell
 npm install
-npx playwright install chromium
 ```
 
 ## Uso

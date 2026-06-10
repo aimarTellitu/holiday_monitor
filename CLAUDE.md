@@ -10,12 +10,11 @@ A single-shot availability scraper for Camping Alba (Capfun). It runs **one chec
 
 ```powershell
 npm install
-npx playwright install chromium   # one-time: download the browser
 npm start                         # or: node check-camping.js
 $env:HEARTBEAT = "1"; node check-camping.js   # also send a "still alive" Telegram
 ```
 
-There are no tests, linter, or build step. To **verify the parser works**, point `CONFIG.mes` + `diasLlegada[].columna` at a week known to have availability and confirm it lists accommodations with prices (see "Editing CONFIG" below).
+There are no tests, linter, or build step. To **verify the parser works**, point `CONFIG.mois`/`annee` + `diasLlegada[].columna` at a week known to have availability and confirm it lists accommodations with prices (see "Editing CONFIG" below).
 
 ## Exit codes (load-bearing — the CI relies on them)
 
@@ -29,23 +28,25 @@ The GitHub workflow runs `node check-camping.js || [ $? -eq 1 ]` so exit `1` doe
 
 ## Architecture / why it's shaped this way
 
-The target page is pure JS: the price table is paginated by month via AJAX, and changing the arrival day re-renders the table through a jQuery handler. A plain `fetch` can't see the rendered table, so the script drives a **real Chromium via Playwright**.
+The target page is pure JS, but it renders its price table by calling its own backend endpoint (`tableau_resa2024.php` with `div=mobile`). That endpoint returns the **already-built HTML fragment for one week** per request, so the script hits it directly with a native `fetch` and parses the fragment with `node-html-parser` — no browser, no Playwright. (Earlier versions drove a real Chromium via Playwright; that was dropped because the endpoint serves everything we need as static HTML.)
 
 Flow in `check-camping.js`:
 1. `ejecutarUnaVez()` — entry point. Decides exit code, sends Telegram, handles `HEARTBEAT`.
-2. `ejecutarChequeo()` — launches the browser, loops over `CONFIG.diasLlegada`, returns findings. Throws on unrecoverable errors. Does **not** notify or exit (caller's job).
-3. Per arrival day: `seleccionarDiaLlegada()` (selects `#sejour_arrivee`, waits for AJAX re-render) → `seleccionarMes()` (clicks the month tab, verifies it became active) → `extraerDisponibilidad()`.
-4. `extraerDisponibilidad(columnaFechas)` runs **inside the browser** (`page.evaluate`). It must be self-contained — no closures over Node-side variables (note it redefines its own `norm` helper for this reason).
+2. `ejecutarChequeo()` — loops over `CONFIG.diasLlegada`, returns findings. Throws on unrecoverable errors. Does **not** notify or exit (caller's job).
+3. Per arrival day: `localizarSemana()` requests `num_semaine = 1..maxSemanas` for the configured month/arrival day, parses each fragment, and returns the one whose date label (`Del DD/MM al DD/MM`) matches `dia.columna`. Throws if none match.
+4. `parsearSemana(html)` does all the parsing in one pass: date range, the "¡Estamos COMPLETOS!" banner, and the available accommodations.
 
-### DOM-scraping gotchas (the fragile parts)
+### Parsing gotchas (the fragile parts)
 
-- There are **two** `table.table-prix` elements: a floating header clone from floatThead (carries the date ranges in `aria-label`/text) and the real data table. The code reads the **column index** from the header clone, then reads **data** from `table.table-prix:not(.floatThead-table)`.
+- One request = one week, fixed by URL params (`mois`/`annee` + `num_semaine` + `sejour_arrivee`). We don't pick the week by parsing column headers — we iterate `num_semaine` and **match the date label**, which self-corrects if the Nth-Saturday offset shifts.
 - The week label depends on the arrival day: the site shows Saturday-to-Saturday or Sunday-to-Sunday weeks, so **each entry in `diasLlegada` carries its own `columna`** (e.g. Sat `Del 22/08 al 29/08`, Sun `Del 23/08 al 30/08`).
-- Only `tr.ligne_tarif` rows are real bookable accommodations; category-summary rows are skipped. A cell is "full" if it has class `tableau-resa-complet` or matches `/COMPLETO/i`; "available" if it contains a digit; `-`/empty is ignored.
+- A fully-booked week renders a banner (`¡Estamos COMPLETOS para esta semana!`) and **no priced rows** — that's what `completa` detects. Otherwise, only `tr.ligne_tarif` rows are bookable; a row counts as available when its data cell has a price link (`td a` with digits). The name is the first `span.float-left` of the row's `<th>`; the trailing `N Pers - … Habitaciones` descriptor lives in a separate span.
+- The page is served as **latin-1**: read the response as `Buffer.from(...).toString('latin1')` before parsing. `node-html-parser`'s `.text` decodes HTML entities (`&euro;`, `&iacute;`…) on its own, so there's no manual entity table.
+- The URL carries **stable camp identifiers** (`id_resa_thelis=6777`, `camping=alba`). If Capfun changes those, the fetch returns the wrong/empty fragment — same class of fragility as the old DOM scraping, just relocated to the query string.
 
 ### Editing CONFIG
 
-The `CONFIG` block at the top of `check-camping.js` is the only thing you normally change. Change `mes` and `diasLlegada[].columna` **together** — they must point at the same calendar week or the column lookup throws `NO_COLUMNA` (exit `2`).
+The `CONFIG` block at the top of `check-camping.js` is the only thing you normally change. Change `mois`/`annee` and `diasLlegada[].columna` **together** — they must point at the same calendar week, or `localizarSemana()` never finds a matching label and throws (exit `2`).
 
 ## Telegram notifications (optional)
 
@@ -58,4 +59,4 @@ The `CONFIG` block at the top of `check-camping.js` is the only thing you normal
 ## Conventions
 
 - Code, comments, logs, and docs are in **Spanish** — match that when editing.
-- Zero runtime dependencies beyond Playwright; the `.env` loader and HTTP client are native Node 18+. Don't add libraries for things Node already does.
+- The only runtime dependency is `node-html-parser` (HTML parsing — Node has no native HTML parser); the `.env` loader and HTTP client are native Node 18+ (`process.loadEnvFile`, `fetch`). Don't add libraries for things Node already does.

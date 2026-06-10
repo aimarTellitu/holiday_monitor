@@ -3,22 +3,23 @@
 /**
  * Monitor de disponibilidad — Camping Alba (Capfun)
  *
- * Hace UN chequeo de la web y avisa por log si la semana indicada
- * (por defecto "Del 23/08 al 30/08") tiene algún alojamiento que NO esté
- * marcado como "COMPLETO", probando primero la llegada en sábado y luego
- * en domingo.
+ * Hace UN chequeo de la web y avisa si la semana indicada (por defecto
+ * "Del 23/08 al 30/08") tiene algún alojamiento que NO esté marcado como
+ * "COMPLETO", probando primero la llegada en sábado y luego en domingo.
  *
- * La página es JS pura (la tabla se pagina por meses vía AJAX y el día de
- * llegada recarga mediante un handler de jQuery), por eso se usa Playwright
- * con un navegador real en lugar de un simple fetch.
+ * En lugar de renderizar la página con un navegador, consulta directamente el
+ * endpoint que la propia web usa para pintar la tabla en móvil
+ * (tableau_resa2024.php con div=mobile). Ese endpoint devuelve el fragmento
+ * HTML de UNA semana ya montado, así que basta un `fetch` nativo + parseo de
+ * texto: sin Playwright, sin navegador y sin dependencias de runtime.
  *
  * Exit codes:
  *   0 -> se encontró al menos una disponibilidad
  *   1 -> todo COMPLETO en todos los días probados
- *   2 -> error (no carga la página, no aparece la columna, layout cambiado...)
+ *   2 -> error (no responde el endpoint, no aparece la semana, layout cambiado...)
  */
 
-const { chromium } = require('playwright');
+const { parse } = require('node-html-parser');
 
 // Carga variables desde un fichero .env si existe (token/chat_id de Telegram),
 // usando el soporte nativo de Node (sin dependencias). Si no hay .env, seguimos
@@ -31,23 +32,37 @@ try {
 
 // ---------------------------------------------------------------------------
 // CONFIG — edítalo para verificar el parseo con otras fechas.
-// Cambia `mes` y `columnaFechas` a la vez (p.ej. 'JULIO' + 'Del 19/07 al 26/07')
-// para comprobar contra una semana que sí tenga hueco.
+// Cambia `mois`/`annee` y `diasLlegada[].columna` a la vez (p.ej. mois 9 +
+// 'Del 05/09 al 12/09') para comprobar contra una semana que sí tenga hueco.
 // ---------------------------------------------------------------------------
 // OJO: la etiqueta de la columna depende del día de llegada, porque la web
 // muestra semanas de sábado-a-sábado o de domingo-a-domingo según corresponda.
 // Para finales de agosto de 2026: sábado = "Del 22/08 al 29/08",
 // domingo = "Del 23/08 al 30/08". Por eso cada día lleva su propia `columna`.
 const CONFIG = {
-  url: 'https://www.capfun.es/camping-francia-catalogne-alba-ES.html',
-  mes: 'AGOSTO', // pestaña de mes a seleccionar
+  endpoint: 'https://www.capfun.es/php/tableau_resa2024.php',
+  // Parámetros fijos del camping (identificadores estables de Capfun).
+  baseParams: {
+    camping: 'alba',
+    lang: 'ES',
+    id_resa_thelis: '6777',
+    div: 'mobile',
+    sejour_type: 'LOCATION',
+    sejour_duree: '8',
+    sejour_nb_pers: '0',
+    sejour_option: '0',
+  },
+  mois: 8, // mes a consultar (8 = agosto)
+  annee: 2026,
+  // Cuántas semanas (num_semaine) probar al buscar la columna por etiqueta.
+  // Un mes tiene como mucho 5 sábados/domingos; 6 da margen de sobra.
+  maxSemanas: 6,
   diasLlegada: [
-    // orden de prueba; `columna` = cabecera (aria-label) de la semana a comprobar
+    // orden de prueba; `columna` = etiqueta de la semana a comprobar.
     { valor: 'SAMEDI', etiqueta: 'SÁBADO', columna: 'Del 22/08 al 29/08' },
     { valor: 'DIMANCHE', etiqueta: 'DOMINGO', columna: 'Del 23/08 al 30/08' },
   ],
-  headless: true,
-  timeoutMs: 45000,
+  timeoutMs: 30000,
 };
 
 // ---------------------------------------------------------------------------
@@ -58,109 +73,97 @@ function log(msg) {
   console.log(`[${ts}] ${msg}`);
 }
 
-const normalizar = (s) => (s || '').replace(/\s+/g, ' ').trim();
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+/** Construye la URL del endpoint para una semana/día concretos. */
+function construirUrl({ num_semaine, sejour_arrivee }) {
+  const params = new URLSearchParams({
+    ...CONFIG.baseParams,
+    bouton: `mois-${CONFIG.mois}-${CONFIG.annee}`,
+    mois: String(CONFIG.mois),
+    annee: String(CONFIG.annee),
+    num_semaine: String(num_semaine),
+    sejour_arrivee,
+  });
+  return `${CONFIG.endpoint}?${params.toString()}`;
+}
+
+/** Descarga el fragmento HTML, decodificado como latin-1. Aborta por timeout. */
+async function descargar(url) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), CONFIG.timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13)' },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} al pedir el endpoint`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.toString('latin1');
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Parseo del fragmento HTML (con node-html-parser; las entidades como &euro;
+// o los acentos se decodifican solos al leer `.text`).
+// ---------------------------------------------------------------------------
 
 /**
- * Lee, en la página ya cargada en el mes correcto, las celdas de la columna
- * cuya cabecera (aria-label) coincide con `columnaFechas` y devuelve la lista
- * de alojamientos disponibles (los que NO están COMPLETO).
+ * Parsea el fragmento de una semana y devuelve:
+ *   - rango: etiqueta servida, p.ej. "Del 05/09 al 12/09" (o null)
+ *   - completa: true si muestra "¡Estamos COMPLETOS para esta semana!"
+ *   - disponibles: alojamientos reservables con precio
  *
- * Se ejecuta dentro del navegador (browser context).
+ * Solo las filas `tr.ligne_tarif` son alojamientos reservables. Una fila
+ * cuenta como disponible si su celda de la semana trae un precio (un enlace
+ * a la reserva con cifras); las celdas "-" (sin oferta) no traen precio.
  */
-function extraerDisponibilidad(columnaFechas) {
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+function parsearSemana(html) {
+  const root = parse(html);
 
-  // Hay 2 tablas .table-prix: el clon flotante de floatThead (solo cabeceras,
-  // lleva las fechas en aria-label/texto) y la tabla real con las filas de
-  // datos. Sacamos el índice de columna de la cabecera y los datos de la real.
-  // 1) Índice de columna desde la cabecera que contenga el rango de fechas.
-  let colIndex = -1;
-  for (const tr of document.querySelectorAll('table.table-prix tr')) {
-    const celdas = [...tr.children];
-    const idx = celdas.findIndex(
-      (c) => norm(c.getAttribute('aria-label')) === columnaFechas || norm(c.textContent) === columnaFechas
-    );
-    if (idx >= 0) {
-      colIndex = idx;
-      break;
-    }
-  }
-  if (colIndex < 0) return { error: 'NO_COLUMNA' };
+  const celdaFecha = root.querySelector('th.tableau-resa-date');
+  const rango = celdaFecha ? norm(celdaFecha.text) : null;
 
-  // 2) Tabla real de datos (la que NO es el clon flotante).
-  const dataTable = document.querySelector('table.table-prix:not(.floatThead-table)');
-  if (!dataTable) return { error: 'NO_TABLA' };
+  const completa = /COMPLETOS?\s+para esta semana/i.test(root.text);
 
-  // 3) Recorrer SOLO las filas de alojamiento reservable (tr.ligne_tarif).
-  //    Las filas "Nuestros ... ver mas" son resúmenes de categoría y se
-  //    descartan. Para cada fila se mira la celda en `colIndex`:
-  //    - COMPLETO             -> lleno
-  //    - con precio (dígitos) -> disponible
-  //    - "-" / vacío          -> sin oferta, se ignora
   const disponibles = [];
   let comprobadas = 0;
-  for (const tr of dataTable.querySelectorAll('tr.ligne_tarif')) {
-    const objetivo = [...tr.children][colIndex];
-    if (!objetivo || objetivo.tagName !== 'TD') continue;
-
-    const texto = norm(objetivo.textContent);
-    const esCompleto = objetivo.classList.contains('tableau-resa-complet') || /COMPLETO/i.test(texto);
-    const tienePrecio = /\d/.test(texto);
-
-    if (!esCompleto && !tienePrecio) continue; // separador / celda vacía
+  for (const fila of root.querySelectorAll('tr.ligne_tarif')) {
     comprobadas++;
+    const enlacePrecio = fila.querySelector('td a');
+    if (!enlacePrecio || !/\d/.test(enlacePrecio.text)) continue; // sin precio
 
-    if (!esCompleto && tienePrecio) {
-      // Tipo de alojamiento = primera celda (TH) de la fila, a la izquierda.
-      const etiquetaCelda = tr.querySelector('th, td');
-      const tipo = norm(etiquetaCelda ? etiquetaCelda.textContent : '') || '(sin nombre)';
-      disponibles.push({ tipo, precio: texto });
-    }
+    // Nombre del alojamiento: primer <span class="float-left"> del <th>
+    // (el descriptor "N Pers - ... Habitaciones" va en otro span aparte).
+    const nombre = fila.querySelector('span.float-left');
+    disponibles.push({
+      tipo: norm(nombre ? nombre.text : '') || '(sin nombre)',
+      precio: norm(enlacePrecio.text),
+    });
   }
 
-  return { colIndex, comprobadas, disponibles };
+  return { rango, completa, comprobadas, disponibles };
 }
 
-// ---------------------------------------------------------------------------
-// Pasos de navegación
-// ---------------------------------------------------------------------------
-
-/** Selecciona el día de llegada y espera a que la tabla se recargue. */
-async function seleccionarDiaLlegada(page, valor) {
-  await page.selectOption('#sejour_arrivee', valor);
-  // El handler jQuery recarga la tabla vía AJAX; damos margen a que repinte.
-  await page.waitForTimeout(2500);
-  await page.waitForSelector('table.table-prix', { timeout: CONFIG.timeoutMs });
-}
-
-/** Hace clic en la pestaña del mes indicado y verifica que queda activa. */
-async function seleccionarMes(page, mes) {
-  const clicado = await page.evaluate((mesObjetivo) => {
-    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toUpperCase();
-    const tabs = [...document.querySelectorAll('.action-onglet-mois')];
-    const tab = tabs.find((t) => norm(t.textContent) === mesObjetivo);
-    if (!tab) return false;
-    tab.click();
-    return true;
-  }, mes.toUpperCase());
-
-  if (!clicado) throw new Error(`No se encontró la pestaña de mes "${mes}"`);
-
-  await page.waitForTimeout(2000);
-
-  // Verificar que la pestaña activa es la del mes pedido.
-  const activo = await page.evaluate(() => {
-    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toUpperCase();
-    const act = document.querySelector('.onglet-mois-actif');
-    return act ? norm(act.textContent) : null;
-  });
-  if (activo !== mes.toUpperCase()) {
-    throw new Error(`No se pudo activar el mes "${mes}" (activo: "${activo}")`);
+/**
+ * Busca, para un día de llegada, la semana cuya etiqueta coincide con
+ * `dia.columna`, probando num_semaine = 1..maxSemanas. Devuelve la semana ya
+ * parseada. Lanza si no aparece (la fecha objetivo no está en este mes).
+ */
+async function localizarSemana(dia) {
+  for (let semana = 1; semana <= CONFIG.maxSemanas; semana++) {
+    const html = await descargar(construirUrl({ num_semaine: semana, sejour_arrivee: dia.valor }));
+    const parsed = parsearSemana(html);
+    if (!parsed.rango) continue; // fragmento inesperado para esta semana
+    if (parsed.rango === dia.columna) return parsed;
   }
+  throw new Error(`No se encontró la columna "${dia.columna}" en el mes ${CONFIG.mois}/${CONFIG.annee}`);
 }
 
 // ---------------------------------------------------------------------------
-// Programa principal
+// Telegram
 /**
  * Envía un mensaje por Telegram usando la Bot API.
  * Requiere las variables de entorno TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID
@@ -193,63 +196,45 @@ async function enviarTelegram(texto) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Programa principal
+// ---------------------------------------------------------------------------
+
 /**
- * Lanza un navegador, comprueba todos los días configurados y devuelve los
- * hallazgos. No envía notificaciones ni termina el proceso: eso lo decide
- * quien lo llama. Lanza excepción si hay un error
- * irrecuperable (página no carga, columna ausente, layout cambiado...).
+ * Comprueba todos los días configurados y devuelve los hallazgos. No envía
+ * notificaciones ni termina el proceso: eso lo decide quien lo llama. Lanza
+ * excepción si hay un error irrecuperable (endpoint caído, semana ausente,
+ * layout cambiado...).
  *
  * @returns {Promise<Array<{etiqueta, columna, disponibles: Array<{tipo, precio}>}>>}
  */
 async function ejecutarChequeo() {
-  const browser = await chromium.launch({ headless: CONFIG.headless });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(CONFIG.timeoutMs);
-
   const hallazgos = [];
-  try {
-    log(`Navegando a ${CONFIG.url}`);
-    await page.goto(CONFIG.url, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table.table-prix', { timeout: CONFIG.timeoutMs });
 
-    // Aceptar cookies si aparece el banner (no bloquea si no existe).
-    try {
-      await page.click('#tarteaucitronPersonalize2, .tarteaucitronCTAButton, #cookie-accept', { timeout: 3000 });
-    } catch (_) {
-      /* sin banner de cookies, seguimos */
+  for (const dia of CONFIG.diasLlegada) {
+    log(`--- Probando llegada en ${dia.etiqueta} ---`);
+
+    const { completa, comprobadas, disponibles } = await localizarSemana(dia);
+    log(`[${dia.etiqueta}] Semana "${dia.columna}" localizada`);
+
+    if (completa) {
+      log(`❌ [${dia.etiqueta}] Todo COMPLETO para ${dia.columna}`);
+      continue;
     }
 
-    for (const dia of CONFIG.diasLlegada) {
-      log(`--- Probando llegada en ${dia.etiqueta} ---`);
+    log(`[${dia.etiqueta}] ${comprobadas} alojamientos revisados`);
 
-      await seleccionarDiaLlegada(page, dia.valor);
-      log(`[${dia.etiqueta}] Día de llegada seleccionado`);
-
-      await seleccionarMes(page, CONFIG.mes);
-      log(`[${dia.etiqueta}] Mes ${CONFIG.mes} seleccionado`);
-
-      const res = await page.evaluate(extraerDisponibilidad, dia.columna);
-
-      if (res.error === 'NO_TABLA') throw new Error('No se encontró la tabla de precios');
-      if (res.error === 'NO_COLUMNA') {
-        throw new Error(`No se encontró la columna "${dia.columna}" en el mes ${CONFIG.mes}`);
+    if (disponibles.length > 0) {
+      hallazgos.push({ etiqueta: dia.etiqueta, columna: dia.columna, disponibles });
+      log(`✅ [${dia.etiqueta}] DISPONIBLE ${dia.columna}:`);
+      for (const d of disponibles) {
+        log(`     • ${d.tipo} — ${d.precio}`);
       }
-
-      log(`[${dia.etiqueta}] Columna encontrada (índice ${res.colIndex}); ${res.comprobadas} alojamientos revisados`);
-
-      if (res.disponibles.length > 0) {
-        hallazgos.push({ etiqueta: dia.etiqueta, columna: dia.columna, disponibles: res.disponibles });
-        log(`✅ [${dia.etiqueta}] DISPONIBLE ${dia.columna}:`);
-        for (const d of res.disponibles) {
-          log(`     • ${d.tipo} — ${d.precio}`);
-        }
-      } else {
-        log(`❌ [${dia.etiqueta}] Todo COMPLETO para ${dia.columna}`);
-      }
+    } else {
+      log(`❌ [${dia.etiqueta}] Sin alojamientos disponibles para ${dia.columna}`);
     }
-  } finally {
-    await browser.close();
   }
+
   return hallazgos;
 }
 
@@ -261,7 +246,7 @@ function componerMensaje(hallazgos) {
     for (const d of h.disponibles) lineas.push(`• ${d.tipo} — ${d.precio}`);
     lineas.push('');
   }
-  lineas.push(CONFIG.url);
+  lineas.push('https://www.capfun.es/camping-francia-catalogne-alba-ES.html');
   return lineas.join('\n');
 }
 
@@ -276,7 +261,7 @@ function componerMensaje(hallazgos) {
 async function ejecutarUnaVez() {
   const heartbeat = !!process.env.HEARTBEAT;
   const resumenFechas = CONFIG.diasLlegada.map((d) => `${d.etiqueta}=${d.columna}`).join(', ');
-  log(`Iniciando chequeo en Camping Alba (mes ${CONFIG.mes}) — ${resumenFechas}`);
+  log(`Iniciando chequeo en Camping Alba (mes ${CONFIG.mois}/${CONFIG.annee}) — ${resumenFechas}`);
   try {
     const hallazgos = await ejecutarChequeo();
     const hayHueco = hallazgos.length > 0;

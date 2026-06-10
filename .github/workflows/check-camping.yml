@@ -27,9 +27,6 @@ jobs:
 
       - run: npm ci
 
-      - name: Instalar Chromium para Playwright
-        run: npx playwright install --with-deps chromium
-
       - name: Chequear disponibilidad
         # HEARTBEAT solo se activa cuando dispara el cron del heartbeat; en el
         # chequeo normal y en los lanzamientos manuales queda vacío.

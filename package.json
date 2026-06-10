@@ -8,6 +8,6 @@
     "start": "node check-camping.js"
   },
   "dependencies": {
-    "playwright": "^1.49.0"
+    "node-html-parser": "^7.1.0"
   }
 }
