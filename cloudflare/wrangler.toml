@@ -1,0 +1,18 @@
+name = "camping-alba-monitor"
+main = "src/worker.js"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cron Triggers de Cloudflare (fiables y puntuales).
+#   - chequeo de disponibilidad cada 30 min
+#   - heartbeat "sigo vivo" 5 veces/día (debe coincidir con CONFIG.cronHeartbeat
+#     en src/worker.js para que se detecte como heartbeat)
+[triggers]
+crons = ["*/30 * * * *", "15 7,10,13,16,19 * * *"]
+
+[vars]
+# Empezamos con el heartbeat forzado en CADA ejecución para validar que todo va.
+# Cuando ya no lo necesites, ponlo a "0" (o bórralo) y vuelve a desplegar.
+# OJO: esto es una VARIABLE en claro; los tokens NO van aquí, van como secrets
+# (wrangler secret put TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).
+HEARTBEAT_SIEMPRE = "1"

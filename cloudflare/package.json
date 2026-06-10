@@ -1,0 +1,18 @@
+{
+  "name": "camping-alba-monitor-worker",
+  "version": "1.0.0",
+  "description": "Monitor de Camping Alba desplegado como Cloudflare Worker con Cron Triggers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "node-html-parser": "^7.1.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3"
+  }
+}

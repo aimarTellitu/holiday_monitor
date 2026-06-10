@@ -100,6 +100,12 @@ la nube con dos programaciones:
 El script sale con código `1` cuando todo está `COMPLETO`; el workflow lo trata
 como ejecución correcta (`node check-camping.js || [ $? -eq 1 ]`), no como fallo.
 
+> 💡 **¿El cron de GitHub no dispara?** Es un problema conocido (sobre todo en
+> repos recién creados) y poco fiable para un monitor. Como alternativa **más
+> fiable y también gratuita** tienes el mismo monitor preparado para
+> **Cloudflare Workers** (Cron Triggers puntuales) en la carpeta
+> [`cloudflare/`](cloudflare/README.md).
+
 ### Pasos para ponerlo en marcha
 
 El repositorio de GitHub ya está creado y es **público**

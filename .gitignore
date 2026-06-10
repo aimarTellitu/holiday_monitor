@@ -1,3 +1,8 @@
 node_modules/
 .env
 .playwright-mcp/
+
+# Cloudflare Worker (artefactos de build y estado local de wrangler)
+cloudflare/dist/
+cloudflare/.wrangler/
+.dev.vars
