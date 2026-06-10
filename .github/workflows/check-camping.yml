@@ -1,0 +1,42 @@
+name: Monitor Camping Alba
+
+# GitHub Actions usa SIEMPRE hora UTC. En horario de verano España = UTC+2,
+# así que las horas de abajo son: 7,10,13,16,19 UTC -> 9,12,15,18,21 hora española.
+# (En invierno, al ser el cron fijo en UTC, se corren a 8,11,14,17,20.)
+on:
+  schedule:
+    - cron: '*/30 * * * *'           # chequeo de disponibilidad cada 30 min
+    - cron: '0 7,10,13,16,19 * * *'  # heartbeat "sigo vivo" 5 veces/día
+  workflow_dispatch: {}              # permite lanzarlo a mano desde la pestaña Actions
+
+# Si llegan dos disparos solapados, deja correr el más reciente.
+concurrency:
+  group: camping-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Instalar Chromium para Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Chequear disponibilidad
+        # HEARTBEAT solo se activa cuando dispara el cron del heartbeat; en el
+        # chequeo normal y en los lanzamientos manuales queda vacío.
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HEARTBEAT: ${{ github.event.schedule == '0 7,10,13,16,19 * * *' && '1' || '' }}
+        # El script sale con 1 cuando todo está COMPLETO (no es un fallo del
+        # workflow), así que no marcamos la ejecución como fallida por ello.
+        run: node check-camping.js || [ $? -eq 1 ]

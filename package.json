@@ -1,0 +1,13 @@
+{
+  "name": "camping-alba-monitor",
+  "version": "1.0.0",
+  "description": "Chequeo de disponibilidad de Camping Alba (Capfun) para una semana concreta",
+  "type": "commonjs",
+  "main": "check-camping.js",
+  "scripts": {
+    "start": "node check-camping.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
