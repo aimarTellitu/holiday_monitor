@@ -81,14 +81,21 @@ GitHub Actions.
 El repo incluye `.github/workflows/check-camping.yml`, que ejecuta el chequeo en
 la nube con dos programaciones:
 
-- **Chequeo**: cada 30 min (`*/30 * * * *`).
-- **Heartbeat**: 5 veces al día (`0 7,10,13,16,19 * * *`), activando `HEARTBEAT`
+- **Chequeo**: cada 30 min (`5,35 * * * *`).
+- **Heartbeat**: 5 veces al día (`15 7,10,13,16,19 * * *`), activando `HEARTBEAT`
   solo en ese disparo.
 
 > ⚠️ **El cron de GitHub usa siempre hora UTC.** En horario de verano España va
 > UTC+2, así que `7,10,13,16,19` UTC = **9, 12, 15, 18 y 21 hora española**. En
 > invierno (UTC+1) se corren a 8, 11, 14, 17 y 20. Si quieres horas exactas todo
 > el año habría que meter lógica de zona horaria en el código.
+
+> ⚠️ **Los minutos no son 0/30 a propósito.** GitHub retrasa —y a veces
+> **descarta**— las ejecuciones programadas en los picos de carga, que coinciden
+> con el inicio de cada hora. Por eso se usan minutos "raros" (`5,35` y `15`).
+> Aun así, los `schedule` de GitHub **no son puntuales**: pueden retrasarse
+> bastantes minutos. Si el primer disparo automático no aparece, espera una
+> ventana de 30-60 min antes de darlo por roto.
 
 El script sale con código `1` cuando todo está `COMPLETO`; el workflow lo trata
 como ejecución correcta (`node check-camping.js || [ $? -eq 1 ]`), no como fallo.

@@ -3,10 +3,15 @@ name: Monitor Camping Alba
 # GitHub Actions usa SIEMPRE hora UTC. En horario de verano España = UTC+2,
 # así que las horas de abajo son: 7,10,13,16,19 UTC -> 9,12,15,18,21 hora española.
 # (En invierno, al ser el cron fijo en UTC, se corren a 8,11,14,17,20.)
+#
+# OJO con los minutos: GitHub retrasa o DESCARTA los cron en los momentos de
+# alta carga, que coinciden con el inicio de cada hora (minuto :00) y, en menor
+# medida, la media hora. Por eso NO usamos minuto 0/30, sino minutos
+# "raros" (5,35 y 15) para reducir el riesgo de que se salte la ejecución.
 on:
   schedule:
-    - cron: '*/30 * * * *'           # chequeo de disponibilidad cada 30 min
-    - cron: '0 7,10,13,16,19 * * *'  # heartbeat "sigo vivo" 5 veces/día
+    - cron: '5,35 * * * *'            # chequeo de disponibilidad cada 30 min
+    - cron: '15 7,10,13,16,19 * * *'  # heartbeat "sigo vivo" 5 veces/día
   workflow_dispatch: {}              # permite lanzarlo a mano desde la pestaña Actions
 
 # Si llegan dos disparos solapados, deja correr el más reciente.
@@ -38,7 +43,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          HEARTBEAT: ${{ (github.event.schedule == '0 7,10,13,16,19 * * *' || vars.HEARTBEAT_SIEMPRE == '1') && '1' || '' }}
+          HEARTBEAT: ${{ (github.event.schedule == '15 7,10,13,16,19 * * *' || vars.HEARTBEAT_SIEMPRE == '1') && '1' || '' }}
         # El script sale con 1 cuando todo está COMPLETO (no es un fallo del
         # workflow), así que no marcamos la ejecución como fallida por ello.
         run: node check-camping.js || [ $? -eq 1 ]

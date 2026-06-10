@@ -54,7 +54,7 @@ The `CONFIG` block at the top of `check-camping.js` is the only thing you normal
 
 ## Deployment
 
-`.github/workflows/check-camping.yml` runs the check every 30 min, plus a heartbeat schedule (`0 7,10,13,16,19 * * *`) that sets `HEARTBEAT`. **All crons are UTC** — adjust expectations for Spanish time (UTC+2 summer / UTC+1 winter). Credentials live in repo Secrets, never in code. GitHub disables crons after 60 days of repo inactivity.
+`.github/workflows/check-camping.yml` runs the check every 30 min (`5,35 * * * *`), plus a heartbeat schedule (`15 7,10,13,16,19 * * *`) that sets `HEARTBEAT`. **All crons are UTC** — adjust expectations for Spanish time (UTC+2 summer / UTC+1 winter). The minutes are deliberately **not** `0`/`30`: GitHub delays and sometimes **drops** scheduled runs at top-of-hour load spikes, so off-peak minutes reduce skips. If you change the heartbeat cron string, update the exact-match comparison in the `HEARTBEAT:` env line too (it detects the heartbeat trigger by string). Credentials live in repo Secrets; the `HEARTBEAT_SIEMPRE` repo *variable* forces the heartbeat on every run. GitHub disables crons after 60 days of repo inactivity.
 
 ## Conventions
 
