@@ -196,11 +196,28 @@ export default {
     ctx.waitUntil(chequearYNotificar(env, heartbeat).catch(() => {}));
   },
 
-  // Disparo manual para probar: abre la URL del Worker en el navegador.
-  // Añade ?heartbeat=1 para forzar también el mensaje "sigo vivo".
+  // Disparo manual para probar. SOLO actúa si se pide explícitamente, para que
+  // ni el favicon ni un crawler que dé con la URL pública lancen chequeos o
+  // avisos por accidente:
+  //   GET /?run=1        -> ejecuta el chequeo (avisa solo si hay hueco)
+  //   GET /?heartbeat=1  -> chequeo + mensaje "sigo vivo"
+  // El heartbeat aquí NO depende de HEARTBEAT_SIEMPRE (esa variable es para el
+  // cron); en manual se controla con el parámetro de la URL.
   async fetch(request, env) {
     const url = new URL(request.url);
-    const heartbeat = url.searchParams.has('heartbeat') || env.HEARTBEAT_SIEMPRE === '1';
+    if (url.pathname !== '/') {
+      return new Response('Not found', { status: 404 });
+    }
+    const heartbeat = url.searchParams.has('heartbeat');
+    const ejecutar = heartbeat || url.searchParams.has('run');
+    if (!ejecutar) {
+      return new Response(
+        'Monitor Camping Alba (Cloudflare Worker).\n' +
+          'El chequeo periódico lo hace el Cron Trigger.\n' +
+          'Para probar a mano: ?run=1 (chequeo) o ?heartbeat=1 (chequeo + "sigo vivo").\n',
+        { headers: { 'content-type': 'text/plain; charset=utf-8' } }
+      );
+    }
     try {
       const { hayHueco, hallazgos } = await chequearYNotificar(env, heartbeat);
       return new Response(JSON.stringify({ hayHueco, hallazgos }, null, 2), {
